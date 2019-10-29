@@ -1,0 +1,22 @@
+name: main
+
+on: [push]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - run: |
+        sudo apt install libmnl-dev
+        cd src
+        make
+
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - run: |
+        sudo apt install libmnl-dev
+        cd src
+        make debug
