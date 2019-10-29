@@ -146,7 +146,7 @@ static void wg_receive_handshake_packet(struct wg_device *wg,
 							message->sender_index);
 			return;
 		}
-		peer = wg_noise_handshake_consume_initiation(message, wg);
+		peer = wg_noise_handshake_consume_initiation(message, wg, skb);
 		if (unlikely(!peer)) {
 			net_dbg_skb_ratelimited("%s: Invalid handshake initiation from %pISpfsc\n",
 						wg->dev->name, skb);
@@ -344,7 +344,7 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
 {
 	struct net_device *dev = peer->device->dev;
 	unsigned int len, len_before_trim;
-	struct wg_peer *routed_peer;
+	struct allowedips_node *allowedips_node;
 
 	wg_socket_set_peer_endpoint(peer, endpoint);
 
@@ -411,12 +411,20 @@ static void wg_packet_consume_data_done(struct wg_peer *peer,
 	if (unlikely(pskb_trim(skb, len)))
 		goto packet_processed;
 
-	routed_peer = wg_allowedips_lookup_src(&peer->device->peer_allowedips,
-					       skb);
-	wg_peer_put(routed_peer); /* We don't need the extra reference. */
-
-	if (unlikely(routed_peer != peer))
+	/* WireGuard BASICS does not require or support IPv6 payloads*/
+	if (skb->protocol != htons(ETH_P_IP))
 		goto dishonest_packet_peer;
+
+	/* Packet saddr comes always with the .0.2 address for every client
+	 * but server expects to receive them from the address assigned for the client
+	 * After finding the first (assumed unique) address of peer allowed IPs, rewrite
+	 * saddr with this address and recalculate checksum.
+	 */
+	allowedips_node = list_first_entry_or_null(&peer->allowedips_list, struct allowedips_node, peer_list);
+	if(!allowedips_node)
+		goto dishonest_packet_peer;
+	ip_hdr(skb)->saddr = be32_to_cpu(*(const u32 *)allowedips_node->bits);
+	ip_send_check(ip_hdr(skb));
 
 	if (unlikely(napi_gro_receive(&peer->napi, skb) == GRO_DROP)) {
 		++dev->stats.rx_dropped;
