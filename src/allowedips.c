@@ -5,6 +5,7 @@
 
 #include "allowedips.h"
 #include "peer.h"
+#include "socket.h"
 
 static void swap_endian(u8 *dst, const u8 *src, u8 bits)
 {
@@ -361,11 +362,24 @@ int wg_allowedips_read_node(struct allowedips_node *node, u8 ip[16], u8 *cidr)
 struct wg_peer *wg_allowedips_lookup_dst(struct allowedips *table,
 					 struct sk_buff *skb)
 {
-	if (skb->protocol == htons(ETH_P_IP))
-		return lookup(table->root4, 32, &ip_hdr(skb)->daddr);
-	else if (skb->protocol == htons(ETH_P_IPV6))
-		return lookup(table->root6, 128, &ipv6_hdr(skb)->daddr);
-	return NULL;
+	struct wg_peer* peer;
+
+	/* WireGuard BASICS does not require or support IPv6 payloads */
+	if (skb->protocol != htons(ETH_P_IP))
+		return NULL;
+
+	/* Packet daddr comes with the unique address for each cient (.0.1,.0.2,...)
+	 * but every client expects to receive only packets sent to .0.1.
+	 * After finding the Peer to which the destination IP addr is allowed, rewrite
+	 * the IP to address to 10.73.0.1 and recalculate checksum.
+	 */
+	peer = lookup(table->root4, 32, &ip_hdr(skb)->daddr);
+	if(peer)
+	{
+		ip_hdr(skb)->daddr = 10 + (73 << 8) + (1 << 24);
+		ip_send_check(ip_hdr(skb));
+	}
+	return peer;
 }
 
 /* Returns a strong reference to a peer */
